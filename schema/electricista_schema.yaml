@@ -1,0 +1,109 @@
+# Schema para análisis de CVs de Electricistas
+version: 1
+variables:
+  # Información de contacto
+  - name: nombre
+    type: string
+    required: false
+    description: Nombre completo del candidato
+
+  - name: mail
+    type: string
+    format: email
+    required: false
+    description: Email de contacto
+
+  - name: telefono
+    type: string
+    required: false
+    description: Teléfono de contacto
+
+  # Información del CV
+  - name: hay_foto_en_cv
+    type: boolean
+    required: false
+    description: Indica si el CV incluye una fotografía
+
+  # Educación
+  - name: primaria_completa
+    type: boolean
+    required: true
+    description: Indica si completó estudios primarios
+
+  - name: secundaria_completa
+    type: boolean
+    required: true
+    description: Indica si completó estudios secundarios
+
+  - name: secundaria_tecnica
+    type: boolean
+    required: false
+    description: Indica si el secundario cursado fue una escuela técnica
+
+  - name: titulo_secundario
+    type: string
+    required: false
+    description: Título obtenido en el secundario (ej. "Técnico Electromecánico", "Bachiller", "Técnico Electricista", etc.)
+
+  - name: terciario_completo
+    type: boolean
+    required: false
+    description: Indica si completó estudios terciarios (tecnicatura relacionada)
+
+  # Experiencia laboral
+  - name: experiencia_electricista_confirmada
+    type: boolean
+    required: true
+    description: Indica si tiene experiencia confirmada como electricista industrial
+
+  - name: años_experiencia
+    type: integer
+    min: 0
+    max: 50
+    required: false
+    description: Años totales de experiencia laboral relevante
+
+  # Ubicación y edad
+  - name: edad
+    type: integer
+    min: 18
+    max: 80
+    required: false
+    description: Edad del candidato en años
+
+  - name: localidad_residencia
+    type: string
+    required: false
+    description: Localidad o ciudad donde reside el candidato
+
+  - name: lugar_residencia_proximo
+    type: boolean
+    required: false
+    description: Indica si reside cerca de la localidad objetivo
+
+  - name: edad_en_rango
+    type: boolean
+    required: false
+    description: Indica si la edad está en el rango deseado (25-45 años)
+
+  # Score y observaciones
+  - name: score_general
+    type: integer
+    min: 1
+    max: 10
+    required: true
+    description: Puntaje general del candidato (1-10) basado en experiencia, educación y adecuación al perfil
+
+  - name: observaciones
+    type: string
+    required: false
+    description: Resumen del perfil en máximo 3 oraciones destacando aspectos relevantes no capturados en otros campos (ej. soft skills, proyectos especiales, certificaciones adicionales)
+
+  # Campos adicionales opcionales
+  - name: idiomas
+    type: list[object]
+    properties:
+      idioma: string
+      nivel: string
+    required: false
+    description: Idiomas que maneja el candidato

@@ -1,0 +1,40 @@
+# Archivo dummy para tests - CV de ejemplo
+Este es un CV de prueba
+
+Nombre: Juan Pérez
+Email: juan.perez@example.com
+Teléfono: +54 11 1234-5678
+
+## Experiencia Laboral
+
+### Desarrollador Python Senior
+**Empresa ABC** | 2020 - Presente (3 años)
+- Desarrollo de aplicaciones web con Django y Flask
+- Implementación de pipelines de datos con Pandas
+- Integración de modelos de ML
+
+### Data Analyst
+**Empresa XYZ** | 2018 - 2020 (2 años)
+- Análisis de datos con Python y R
+- Visualización con Tableau
+- Reportes ejecutivos
+
+## Educación
+
+### Licenciatura en Ciencias de la Computación
+**Universidad Nacional** | 2014 - 2018
+- Promedio: 8.5/10
+- Tesis en Machine Learning
+
+## Habilidades Técnicas
+
+**Lenguajes:** Python, JavaScript, SQL, R
+**Frameworks:** Django, Flask, FastAPI, React
+**Data:** Pandas, NumPy, Scikit-learn, TensorFlow
+**Herramientas:** Git, Docker, AWS, PostgreSQL
+
+## Idiomas
+
+- Español: Nativo
+- Inglés: Avanzado (C1)
+- Portugués: Intermedio

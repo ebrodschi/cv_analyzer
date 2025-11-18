@@ -1,0 +1,47 @@
+# Docker Compose para CV Analyzer
+
+version: '3.8'
+
+services:
+  cv-analyzer:
+    build: .
+    container_name: cv-analyzer
+    ports:
+      - "8501:8501"
+    environment:
+      # LLM API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY}
+
+      # Google Drive (optional)
+      - DRIVE_AUTH_MODE=${DRIVE_AUTH_MODE:-service}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-creds.json
+
+    volumes:
+      # Mount credentials if using Google Drive
+      - ./credentials:/app/credentials:ro
+      # Persist data
+      - ./data:/app/data
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Optional: Redis for caching (for production scaling)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: cv-analyzer-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   restart: unless-stopped
+
+# volumes:
+#   redis-data:

@@ -1,0 +1,36 @@
+# Environment
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+env/
+
+# Google credentials
+*.json
+!tests/samples/*.json
+credentials.json
+token.json
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+*.xlsx
+*.csv
+downloads/
+
+# Tests
+.pytest_cache/
+htmlcov/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
