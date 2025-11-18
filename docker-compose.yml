@@ -8,19 +8,16 @@ services:
     container_name: cv-analyzer
     ports:
       - "8501:8501"
-    environment:
-      # LLM API Keys
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      # - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY}
-
-      # Google Drive (optional)
-      - DRIVE_AUTH_MODE=${DRIVE_AUTH_MODE:-service}
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-creds.json
+    # environment:
+      # OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # AZURE_OPENAI_KEY: ${AZURE_OPENAI_KEY}
+      # DRIVE_AUTH_MODE: ${DRIVE_AUTH_MODE:-service}
+      # GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/google-creds.json
 
     volumes:
       # Mount credentials if using Google Drive
-      - ./credentials:/app/credentials:ro
+      # - ./credentials:/app/credentials:ro
       # Persist data
       - ./data:/app/data
 

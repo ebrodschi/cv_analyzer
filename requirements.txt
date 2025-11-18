@@ -18,3 +18,5 @@ aiohttp>=3.10.0
 pytest>=8.0.0
 python-dotenv>=1.0.0
 docling>=2.0.0
+pytesseract>=0.3.10
+tesserocr>=2.6.0
