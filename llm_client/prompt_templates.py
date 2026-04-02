@@ -4,7 +4,7 @@ Sistema de plantillas de prompts configurables para análisis de CVs.
 
 from typing import Any, Dict, Optional
 
-# Plantillas predefinidas de especialidades
+# Plantillas predefinidas de especialidades (mantenidas para backward compat)
 ESPECIALIDAD_TEMPLATES = {
     "electricista": {
         "titulo": "Electricista de Mantenimiento Industrial",
@@ -54,7 +54,7 @@ ESPECIALIDAD_TEMPLATES = {
 }
 
 
-# Criterios de score por defecto
+# Criterios de score por defecto (mantenido para backward compat)
 DEFAULT_SCORE_CRITERIA = """🎯 Criterios para el score (1-10):
 
 Educación relevante (hasta 2 puntos):
@@ -90,40 +90,51 @@ class PromptConfig:
         radio_km: int = 10,
         criterios_score: Optional[str] = None,
         campos_adicionales: Optional[Dict[str, Any]] = None,
+        profile=None,
     ):
         """
         Inicializa configuración de prompts.
 
         Args:
-            especialidad: Tipo de especialidad (electricista, electromecanico, mecanico, pañolero, personalizado)
+            especialidad: Tipo de especialidad (legacy, ignorado si se pasa profile)
             localidad: Localidad de la posición a cubrir
             radio_km: Radio en kilómetros desde la localidad
-            criterios_score: Criterios personalizados para el score (si es None, usa criterios por defecto)
-            campos_adicionales: Campos adicionales personalizados (para especialidad personalizada)
+            criterios_score: Criterios personalizados para el score (ignorado si se pasa profile)
+            campos_adicionales: Campos adicionales personalizados (legacy)
+            profile: RecruiterProfile que reemplaza especialidad + criterios
         """
-        self.especialidad = especialidad
         self.localidad = localidad
         self.radio_km = radio_km
-        self.criterios_score = criterios_score or DEFAULT_SCORE_CRITERIA
-        self.campos_adicionales = campos_adicionales or {}
+        self.profile = profile
 
-        # Obtener template de especialidad
-        self.template = ESPECIALIDAD_TEMPLATES.get(
-            especialidad, ESPECIALIDAD_TEMPLATES["personalizado"]
-        ).copy()
-
-        # Si es personalizado y hay campos adicionales, sobrescribir
-        if especialidad == "personalizado" and campos_adicionales:
-            self.template.update(campos_adicionales)
+        if profile is not None:
+            # Usar el perfil como fuente de verdad
+            self.especialidad = profile.id
+            self.criterios_score = profile.scoring_criteria or DEFAULT_SCORE_CRITERIA
+            self.template = {
+                "titulo": profile.position.titulo,
+                "experiencia_campo": profile.position.experiencia_campo,
+                "descripcion_experiencia": profile.position.descripcion_experiencia,
+                "exclusiones": profile.position.exclusiones,
+                "rango_edad": profile.position.rango_edad,
+                "conocimientos_relevantes": profile.position.conocimientos_relevantes,
+                "industrias_relevantes": profile.position.industrias_relevantes,
+            }
+            self.campos_adicionales = {}
+        else:
+            # Legacy: usar especialidad string
+            self.especialidad = especialidad
+            self.criterios_score = criterios_score or DEFAULT_SCORE_CRITERIA
+            self.campos_adicionales = campos_adicionales or {}
+            self.template = ESPECIALIDAD_TEMPLATES.get(
+                especialidad, ESPECIALIDAD_TEMPLATES["personalizado"]
+            ).copy()
+            if especialidad == "personalizado" and campos_adicionales:
+                self.template.update(campos_adicionales)
 
     def get_system_prompt(self) -> str:
-        """
-        Genera el system prompt configurado.
-
-        Returns:
-            System prompt personalizado
-        """
-        return """Sos un analista de recursos humanos especializado en perfiles técnicos.
+        """Genera el system prompt configurado."""
+        base = """Sos un analista de recursos humanos especializado en perfiles técnicos.
 Tu tarea es analizar el contenido de UN SOLO CV y devolver un JSON con información estructurada del candidato.
 
 IMPORTANTE:
@@ -137,16 +148,22 @@ IMPORTANTE:
 - Sé preciso y conservador: mejor null/false que inventar información
 - Si un campo no se menciona explícitamente, asumí que es falso o null"""
 
+        # Para perfiles IT con tech stack, agregar instrucción específica
+        if self.profile and self.profile.tech_stack:
+            required = ", ".join(self.profile.tech_stack.required)
+            preferred = ", ".join(self.profile.tech_stack.preferred)
+            base += f"""
+
+EVALUACIÓN DE STACK TECNOLÓGICO:
+Tecnologías requeridas para esta posición: {required}
+Tecnologías deseables: {preferred}
+- Para 'stack_tecnologico': listá TODAS las tecnologías, lenguajes y frameworks mencionados en el CV
+- Para 'match_tech_stack': calculá el porcentaje de tecnologías REQUERIDAS ({required}) que el candidato domina (0-100)"""
+
+        return base
+
     def get_user_prompt_header(self, schema: Dict[str, Any]) -> str:
-        """
-        Genera el encabezado del user prompt con el contexto de la posición.
-
-        Args:
-            schema: Esquema de variables a extraer
-
-        Returns:
-            Encabezado del prompt
-        """
+        """Genera el encabezado del user prompt con el contexto de la posición."""
         titulo = self.template.get("titulo", "Perfil Técnico")
 
         header = f"""Vas a analizar un CV para una posición de: {titulo}"""
@@ -158,12 +175,7 @@ IMPORTANTE:
         return header
 
     def get_field_definitions(self) -> str:
-        """
-        Genera las definiciones de campos específicos de la especialidad.
-
-        Returns:
-            Definiciones de campos
-        """
+        """Genera las definiciones de campos específicos de la especialidad/perfil."""
         experiencia_campo = self.template.get(
             "experiencia_campo", "experiencia_confirmada"
         )
@@ -191,12 +203,7 @@ Definiciones para campos específicos:
         return definitions
 
     def get_score_instructions(self) -> str:
-        """
-        Genera las instrucciones para calcular el score.
-
-        Returns:
-            Instrucciones de score
-        """
+        """Genera las instrucciones para calcular el score."""
         return f"""
 score_general: Número del 1 al 10 según los siguientes criterios:
 
@@ -205,15 +212,7 @@ score_general: Número del 1 al 10 según los siguientes criterios:
 IMPORTANTE: Evalúa cuidadosamente cada criterio y asigna puntos justificados."""
 
     def format_schema_for_prompt(self, schema: Dict[str, Any]) -> str:
-        """
-        Formatea el esquema para incluirlo en el prompt.
-
-        Args:
-            schema: Esquema en formato personalizado
-
-        Returns:
-            Descripción del esquema en texto
-        """
+        """Formatea el esquema para incluirlo en el prompt."""
         lines = ["Esquema JSON requerido:\n{"]
 
         for var in schema["variables"]:
@@ -221,7 +220,6 @@ IMPORTANTE: Evalúa cuidadosamente cada criterio y asigna puntos justificados.""
             var_type = var["type"]
             required = var.get("required", False)
 
-            # Descripción del campo
             desc_parts = [f'  "{name}": ']
 
             if var_type == "string":
@@ -261,16 +259,7 @@ IMPORTANTE: Evalúa cuidadosamente cada criterio y asigna puntos justificados.""
     def build_full_prompt(
         self, cv_text: str, schema: Dict[str, Any]
     ) -> tuple[str, str]:
-        """
-        Construye el prompt completo para análisis de CV.
-
-        Args:
-            cv_text: Texto del CV a analizar
-            schema: Esquema de variables a extraer
-
-        Returns:
-            Tupla (system_prompt, user_prompt)
-        """
+        """Construye el prompt completo para análisis de CV."""
         system_prompt = self.get_system_prompt()
 
         # Construir user prompt
@@ -312,12 +301,7 @@ IMPORTANTE: Evalúa cuidadosamente cada criterio y asigna puntos justificados.""
 
 
 def create_default_config() -> PromptConfig:
-    """
-    Crea una configuración por defecto.
-
-    Returns:
-        PromptConfig con valores por defecto
-    """
+    """Crea una configuración por defecto."""
     return PromptConfig(
         especialidad="personalizado",
         localidad="Buenos Aires",
@@ -327,10 +311,5 @@ def create_default_config() -> PromptConfig:
 
 
 def get_especialidades_disponibles() -> list[str]:
-    """
-    Retorna lista de especialidades predefinidas disponibles.
-
-    Returns:
-        Lista de nombres de especialidades
-    """
+    """Retorna lista de especialidades predefinidas disponibles (legacy)."""
     return [k for k in ESPECIALIDAD_TEMPLATES.keys() if k != "personalizado"]

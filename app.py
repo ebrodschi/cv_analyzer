@@ -49,10 +49,24 @@ from llm_client.prompt_templates import (
 )
 from parsing.docx import parse_docx
 from parsing.pdf import parse_pdf
+from profiles.profile_manager import (
+    get_category_labels,
+    get_profile,
+    import_profile_from_json,
+    list_profiles_grouped,
+    save_custom_profile,
+)
+from profiles.profile_model import PositionConfig, RecruiterProfile, TechStackConfig
+from profiles.schema_builder import build_schema_from_profile
 from schema.validator import validate_extraction
 
 # Imports de módulos locales
-from schema.yaml_loader import get_default_schema, get_variable_names, load_yaml_schema
+from schema.yaml_loader import (
+    get_default_schema,
+    get_schema_for_profile,
+    get_variable_names,
+    load_yaml_schema,
+)
 from utils.excel import (
     create_summary_stats,
     export_to_csv,
@@ -128,12 +142,12 @@ def main():
         # Proveedor LLM
         llm_config = configure_llm_provider()
 
-        # Configuración de Prompts (Especialidad, Localidad, Criterios)
-        # IMPORTANTE: Debe ir antes de schema porque el schema depende de la especialidad
-        prompt_config = configure_prompt_settings()
+        # Configuración de Perfil (reemplaza la anterior selección de especialidad)
+        # IMPORTANTE: Debe ir antes de schema porque el schema depende del perfil
+        active_profile, prompt_config = configure_profile()
 
-        # Schema de variables
-        schema = configure_schema()
+        # Schema de variables (generado desde el perfil)
+        schema = configure_schema(active_profile)
 
         # Google Drive
         drive_config = configure_google_drive()
@@ -188,7 +202,7 @@ def main():
                 )
             elif st.button("🚀 Procesar CVs", type="primary", use_container_width=True):
                 process_all_cvs(
-                    all_files, schema, llm_config, advanced_options, prompt_config
+                    all_files, schema, llm_config, advanced_options, prompt_config, active_profile
                 )
     else:
         st.info("👈 Sube archivos o conecta con Google Drive para comenzar")
@@ -293,47 +307,42 @@ def configure_llm_provider() -> Dict[str, Any]:
     """Configura el proveedor LLM."""
     st.subheader("🤖 Proveedor LLM")
 
-    provider = st.selectbox(
-        "Proveedor",
-        ["OpenAI", "Anthropic (vía LiteLLM)", "Google Gemini", "Otro (LiteLLM)"],
-        help="Selecciona el proveedor de LLM a usar",
+    # Configuración simplificada: solo OpenAI con gpt-4.1-mini / gpt-4.1
+    provider = "OpenAI"
+    model = st.selectbox(
+        "Modelo",
+        ["gpt-4.1-mini", "gpt-4.1"],
+        help="gpt-4.1-mini es más rápido y económico. gpt-4.1 es más preciso.",
     )
 
-    # Mapeo de modelos sugeridos
-    model_suggestions = {
-        "OpenAI": [
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo",
-            "gpt-3.5-turbo",
-        ],
-        "Anthropic (vía LiteLLM)": [
-            "claude-3-5-sonnet-20241022",
-            "claude-3-opus-20240229",
-            "claude-3-sonnet-20240229",
-        ],
-        "Google Gemini": [
-            "gemini/gemini-2.0-flash-exp",
-            "gemini/gemini-1.5-flash",
-            "gemini/gemini-1.5-flash-8b",
-            "gemini/gemini-1.5-pro",
-            "gemini/gemini-exp-1206",
-        ],
-        "Otro (LiteLLM)": [],
-    }
-
-    suggestions = model_suggestions.get(provider, [])
-
-    if suggestions:
-        model = st.selectbox("Modelo", suggestions)
-    else:
-        model = st.text_input(
-            "Modelo",
-            help="Ingresa el nombre del modelo (ej: gpt-4, claude-3-opus-20240229)",
-        )
+    # TODO: Reactivar cuando se necesiten más proveedores
+    # provider = st.selectbox(
+    #     "Proveedor",
+    #     ["OpenAI", "Anthropic (vía LiteLLM)", "Google Gemini", "Otro (LiteLLM)"],
+    #     help="Selecciona el proveedor de LLM a usar",
+    # )
+    # model_suggestions = {
+    #     "OpenAI": [
+    #         "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+    #         "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo",
+    #     ],
+    #     "Anthropic (vía LiteLLM)": [
+    #         "claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-sonnet-20240229",
+    #     ],
+    #     "Google Gemini": [
+    #         "gemini/gemini-2.0-flash-exp", "gemini/gemini-1.5-flash",
+    #         "gemini/gemini-1.5-flash-8b", "gemini/gemini-1.5-pro", "gemini/gemini-exp-1206",
+    #     ],
+    #     "Otro (LiteLLM)": [],
+    # }
+    # suggestions = model_suggestions.get(provider, [])
+    # if suggestions:
+    #     model = st.selectbox("Modelo", suggestions)
+    # else:
+    #     model = st.text_input(
+    #         "Modelo",
+    #         help="Ingresa el nombre del modelo (ej: gpt-4, claude-3-opus-20240229)",
+    #     )
 
     # Verificar y configurar API key
     api_key_var, api_key_configured = check_and_configure_api_key(provider)
@@ -375,9 +384,13 @@ def check_and_configure_api_key(provider: str) -> tuple[str, bool]:
         api_key_source = "archivo .env"
 
     # 2. Verificar en secrets de Streamlit (para deployment)
+    # Busca tanto en mayúsculas (OPENAI_API_KEY) como minúsculas (openai_api_key)
     if not api_key_value:
         try:
-            if env_var.lower() in st.secrets:
+            if env_var in st.secrets:
+                api_key_value = st.secrets[env_var]
+                api_key_source = "Streamlit secrets"
+            elif env_var.lower() in st.secrets:
                 api_key_value = st.secrets[env_var.lower()]
                 api_key_source = "Streamlit secrets"
         except:
@@ -429,22 +442,21 @@ def check_and_configure_api_key(provider: str) -> tuple[str, bool]:
             return env_var, False
 
 
-def configure_schema() -> Dict[str, Any]:
-    """Configura el schema de extracción."""
+def configure_schema(profile: RecruiterProfile = None) -> Dict[str, Any]:
+    """Configura el schema de extracción basado en el perfil activo."""
     st.subheader("📝 Datos a Extraer de los CVs")
 
-    # Obtener la especialidad seleccionada del session_state si existe
-    # (se configuró antes en configure_prompt_settings)
-    especialidad = st.session_state.get("selected_especialidad", "electricista")
-
     use_default = st.checkbox(
-        "Usar configuración predeterminada",
+        "Usar configuración del perfil",
         value=True,
-        help="Activa esta opción para usar los campos estándar ya configurados",
+        help="Activa esta opción para usar los campos generados desde el perfil seleccionado",
     )
 
     if use_default:
-        schema_yaml = get_default_schema(especialidad)
+        if profile:
+            schema_yaml = build_schema_from_profile(profile)
+        else:
+            schema_yaml = get_default_schema()
         st.code(schema_yaml, language="yaml")
     else:
         st.info(
@@ -674,22 +686,60 @@ def configure_schema() -> Dict[str, Any]:
         return None
 
 
-def configure_prompt_settings() -> PromptConfig:
-    """Configura los settings de prompts (especialidad, localidad, criterios)."""
+def configure_profile() -> tuple:
+    """Configura el perfil de reclutamiento. Retorna (RecruiterProfile, PromptConfig)."""
     st.subheader("🎯 Configuración de Análisis")
 
-    # Selección de especialidad
-    especialidades = ["personalizado"] + get_especialidades_disponibles()
-    especialidad = st.selectbox(
-        "Especialidad/Perfil a buscar",
-        especialidades,
-        help="Selecciona una especialidad predefinida o personaliza tu propia búsqueda",
+    # --- Selector de perfil agrupado por categoría ---
+    grouped = list_profiles_grouped()
+    category_labels = get_category_labels()
+
+    # Construir lista de opciones para el selectbox
+    profile_options = []  # (display_name, profile_id)
+    for cat_key in ["industrial", "it", "kiosko", "general", "custom"]:
+        if cat_key not in grouped:
+            continue
+        cat_label = category_labels.get(cat_key, cat_key)
+        for p in grouped[cat_key]:
+            profile_options.append((f"{cat_label} — {p.name}", p.id))
+
+    option_labels = [opt[0] for opt in profile_options]
+    option_ids = [opt[1] for opt in profile_options]
+
+    # Si se importó un perfil, seleccionarlo automáticamente
+    default_idx = 0
+    forced_profile_id = st.session_state.get("_force_select_profile")
+    if forced_profile_id and forced_profile_id in option_ids:
+        default_idx = option_ids.index(forced_profile_id)
+        # Limpiar para no forzar en futuros reruns
+        del st.session_state["_force_select_profile"]
+
+    selected_idx = st.selectbox(
+        "Perfil a buscar",
+        range(len(option_labels)),
+        index=default_idx,
+        format_func=lambda i: option_labels[i],
+        help="Selecciona un perfil predefinido o uno de tus perfiles guardados",
     )
 
-    # Guardar en session_state para que configure_schema pueda usarlo
-    st.session_state.selected_especialidad = especialidad
+    selected_profile_id = option_ids[selected_idx]
+    profile = get_profile(selected_profile_id)
 
-    # Localidad y radio
+    # Guardar en session_state
+    st.session_state.active_profile = profile
+
+    # --- Resumen del perfil ---
+    with st.expander("📋 Resumen del perfil", expanded=False):
+        st.markdown(f"**Posición:** {profile.position.titulo}")
+        if profile.position.descripcion_experiencia:
+            st.markdown(f"**Experiencia buscada:** {profile.position.descripcion_experiencia}")
+        st.markdown(f"**Rango de edad:** {profile.position.rango_edad}")
+        if profile.tech_stack:
+            st.markdown(f"**Tech stack requerido:** {', '.join(profile.tech_stack.required)}")
+            if profile.tech_stack.preferred:
+                st.markdown(f"**Tech stack deseable:** {', '.join(profile.tech_stack.preferred)}")
+
+    # --- Localidad y radio ---
     col1, col2 = st.columns(2)
     with col1:
         localidad = st.text_input(
@@ -706,49 +756,158 @@ def configure_prompt_settings() -> PromptConfig:
             help="Radio aceptable desde la localidad",
         )
 
-    # Criterios de score personalizados
-    with st.expander("📊 Criterios de Score (avanzado)"):
-        use_default_score = st.checkbox("Usar criterios por defecto", value=True)
+    # --- Personalización del perfil (expander) ---
+    with st.expander("✏️ Personalizar Perfil"):
+        tab_pos, tab_stack, tab_score, tab_preap = st.tabs(
+            ["Posición", "Tech Stack", "Scoring", "Pre-aprobación"]
+        )
 
-        if use_default_score:
-            criterios_score = None
-            st.code(DEFAULT_SCORE_CRITERIA, language="text")
-        else:
-            criterios_score = st.text_area(
-                "Criterios personalizados",
-                value=DEFAULT_SCORE_CRITERIA,
+        # Tab Posición
+        with tab_pos:
+            custom_titulo = st.text_input("Título de la posición", value=profile.position.titulo)
+            custom_desc_exp = st.text_area(
+                "Descripción de experiencia buscada",
+                value=profile.position.descripcion_experiencia,
+                height=100,
+            )
+            custom_exclusiones = st.text_input("Exclusiones", value=profile.position.exclusiones)
+            custom_rango_edad = st.text_input("Rango de edad", value=profile.position.rango_edad)
+            custom_conocimientos = st.text_input(
+                "Conocimientos relevantes", value=profile.position.conocimientos_relevantes
+            )
+            custom_industrias = st.text_input(
+                "Industrias relevantes", value=profile.position.industrias_relevantes
+            )
+
+        # Tab Tech Stack (solo visible/útil para IT)
+        with tab_stack:
+            if profile.category == "it" or profile.tech_stack:
+                current_required = ", ".join(profile.tech_stack.required) if profile.tech_stack else ""
+                current_preferred = ", ".join(profile.tech_stack.preferred) if profile.tech_stack else ""
+                custom_required = st.text_area(
+                    "Tecnologías requeridas (separadas por coma)",
+                    value=current_required,
+                    help="Ej: Python, React, SQL",
+                )
+                custom_preferred = st.text_area(
+                    "Tecnologías deseables (separadas por coma)",
+                    value=current_preferred,
+                    help="Ej: Docker, AWS, TypeScript",
+                )
+            else:
+                st.info("El tech stack solo aplica para perfiles IT. Cambiá la categoría si necesitás evaluar tecnologías.")
+                custom_required = ""
+                custom_preferred = ""
+
+        # Tab Scoring
+        with tab_score:
+            custom_scoring = st.text_area(
+                "Criterios de scoring",
+                value=profile.scoring_criteria,
                 height=300,
-                help="Define tus propios criterios para calcular el score del 1-10",
+                help="Definí cómo se calcula el score del 1 al 10",
             )
 
-    # Campos adicionales para especialidad personalizada
-    campos_adicionales = {}
-    if especialidad == "personalizado":
-        with st.expander("⚙️ Configuración Personalizada"):
-            campos_adicionales["titulo"] = st.text_input(
-                "Título de la posición", value="Perfil Técnico"
-            )
-            campos_adicionales["experiencia_campo"] = st.text_input(
-                "Nombre del campo de experiencia",
-                value="experiencia_confirmada",
-                help="Ej: experiencia_electricista_confirmada",
-            )
-            campos_adicionales["descripcion_experiencia"] = st.text_area(
-                "Descripción de experiencia requerida",
-                value="trabajo previo relevante",
-                help="Describe qué tipo de experiencia se busca",
+        # Tab Pre-aprobación
+        with tab_preap:
+            st.markdown("**Condiciones para pre-aprobación** (todos deben ser True)")
+            current_conditions = profile.preaprobado_conditions
+            custom_conditions_str = st.text_area(
+                "Campos booleanos requeridos (uno por línea)",
+                value="\n".join(current_conditions),
+                height=150,
+                help="Listá los campos booleanos que deben ser True para pre-aprobar. Ej: edad_en_rango, experiencia_confirmada",
             )
 
-    # Crear configuración de prompts
-    config = PromptConfig(
-        especialidad=especialidad,
-        localidad=localidad,
-        radio_km=radio_km,
-        criterios_score=criterios_score,
-        campos_adicionales=campos_adicionales if campos_adicionales else None,
+    # --- Construir perfil efectivo con las personalizaciones ---
+    effective_position = PositionConfig(
+        titulo=custom_titulo,
+        experiencia_campo=profile.position.experiencia_campo,
+        descripcion_experiencia=custom_desc_exp,
+        exclusiones=custom_exclusiones,
+        rango_edad=custom_rango_edad,
+        conocimientos_relevantes=custom_conocimientos,
+        industrias_relevantes=custom_industrias,
     )
 
-    return config
+    effective_tech_stack = None
+    if custom_required.strip():
+        effective_tech_stack = TechStackConfig(
+            required=[t.strip() for t in custom_required.split(",") if t.strip()],
+            preferred=[t.strip() for t in custom_preferred.split(",") if t.strip()],
+        )
+    elif profile.tech_stack:
+        effective_tech_stack = profile.tech_stack
+
+    effective_conditions = [
+        c.strip() for c in custom_conditions_str.strip().split("\n") if c.strip()
+    ]
+
+    effective_profile = RecruiterProfile(
+        id=profile.id,
+        name=profile.name,
+        category=profile.category,
+        position=effective_position,
+        tech_stack=effective_tech_stack,
+        extra_fields=profile.extra_fields,
+        scoring_criteria=custom_scoring,
+        preaprobado_conditions=effective_conditions,
+        is_preset=False,
+    )
+
+    st.session_state.active_profile = effective_profile
+
+    # --- Guardar como nuevo perfil / Descargar / Cargar ---
+    with st.expander("💾 Guardar / Descargar / Cargar perfil"):
+        col_save, col_download = st.columns(2)
+
+        with col_save:
+            new_name = st.text_input("Nombre del nuevo perfil", key="save_profile_name")
+            if st.button("Guardar en sesión", key="btn_save_profile") and new_name:
+                new_id = new_name.lower().replace(" ", "_")
+                saved = effective_profile.clone(new_id, new_name)
+                save_custom_profile(saved)
+                st.success(f"Perfil '{new_name}' guardado en esta sesión")
+                st.rerun()
+
+        with col_download:
+            st.download_button(
+                "📥 Descargar perfil (.json)",
+                data=effective_profile.to_json(),
+                file_name=f"perfil_{effective_profile.position.titulo.lower().replace(' ', '_')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        st.divider()
+        uploaded_profile = st.file_uploader(
+            "📤 Cargar perfil (.json)",
+            type=["json"],
+            key="upload_profile",
+        )
+        if uploaded_profile:
+            # Evitar loop: solo procesar si es un archivo nuevo
+            file_id = f"{uploaded_profile.name}_{uploaded_profile.size}"
+            if st.session_state.get("_last_imported_profile") != file_id:
+                try:
+                    imported = import_profile_from_json(uploaded_profile.read().decode("utf-8"))
+                    st.session_state["_last_imported_profile"] = file_id
+                    st.session_state["_force_select_profile"] = imported.id
+                    st.success(f"Perfil '{imported.name}' cargado")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error cargando perfil: {e}")
+            else:
+                st.info("Perfil ya cargado. Subí otro archivo para reemplazarlo.")
+
+    # --- Crear PromptConfig desde el perfil ---
+    config = PromptConfig(
+        profile=effective_profile,
+        localidad=localidad,
+        radio_km=radio_km,
+    )
+
+    return effective_profile, config
 
 
 def configure_google_drive() -> Dict[str, Any]:
@@ -1117,6 +1276,7 @@ def process_all_cvs(
     llm_config: Dict[str, Any],
     options: Dict[str, Any],
     prompt_config: PromptConfig,
+    profile: Optional[RecruiterProfile] = None,
 ):
     """Procesa todos los CVs."""
 
@@ -1194,6 +1354,7 @@ def process_all_cvs(
                 prompt_config,
                 drive_service,
                 options.get("use_ocr", False),  # Pasar configuración de OCR
+                profile,
             ): file_info
             for file_info in selected_files
         }
@@ -1284,6 +1445,7 @@ def process_single_cv(
     prompt_config: PromptConfig,
     drive_service=None,
     use_ocr: bool = False,
+    profile: Optional[RecruiterProfile] = None,
 ) -> Dict[str, Any]:
     """Procesa un solo CV.
 
@@ -1294,6 +1456,7 @@ def process_single_cv(
         prompt_config: Configuración de prompts
         drive_service: Servicio de Google Drive (necesario para archivos de Drive)
         use_ocr: Si True, usa OCR para detectar fotos
+        profile: RecruiterProfile para campos derivados
     """
 
     result = {
@@ -1364,7 +1527,7 @@ def process_single_cv(
         result.update(extracted_data)
 
         # POST-PROCESAMIENTO: Calcular campos derivados
-        result = calculate_derived_fields(result)
+        result = calculate_derived_fields(result, profile=profile)
 
     except Exception as e:
         result["error"] = str(e)
@@ -1372,74 +1535,77 @@ def process_single_cv(
     return result
 
 
-def calculate_derived_fields(result: Dict[str, Any]) -> Dict[str, Any]:
+def _to_bool(value) -> bool:
+    """Convierte un valor a booleano de forma segura."""
+    if value is None or value == "":
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ["true", "yes", "sí", "si", "1"]
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def calculate_derived_fields(
+    result: Dict[str, Any], profile: Optional[RecruiterProfile] = None
+) -> Dict[str, Any]:
     """
     Calcula campos derivados basados en los datos extraídos por el LLM.
 
-    Campos calculados:
-    - preaprobado: edad_en_rango AND experiencia_electricista_confirmada AND hay_foto_en_cv AND secundaria_tecnica
+    Si se pasa un profile, usa profile.preaprobado_conditions.
+    Si no, fallback al comportamiento legacy (busca campos de experiencia conocidos).
 
     Args:
         result: Diccionario con datos extraídos del CV
+        profile: RecruiterProfile (opcional) para condiciones de preaprobación
 
     Returns:
         Diccionario actualizado con campos derivados
     """
-
-    # Función auxiliar para convertir valores a booleano
-    def to_bool(value):
-        if value is None or value == "" or pd.isna(value):
-            return False
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.lower() in ["true", "yes", "sí", "si", "1"]
-        if isinstance(value, (int, float)):
-            return bool(value)
-        return False
-
-    # Calcular preaprobado
-    edad_en_rango = to_bool(result.get("edad_en_rango", False))
-
-    # Buscar el campo de experiencia confirmada (puede tener diferentes nombres según especialidad)
-    experiencia_confirmada = False
-    possible_exp_fields = [
-        "experiencia_electricista_confirmada",
-        "experiencia_electromecanico_confirmada",
-        "experiencia_mecanico_industrial_confirmada",
-        "experiencia_pañol_depositos_confirmada",
-        "experiencia_confirmada",
-    ]
-    for field in possible_exp_fields:
-        if field in result:
-            experiencia_confirmada = to_bool(result.get(field, False))
-            break
-
-    hay_foto = to_bool(result.get("hay_foto_en_cv", False))
-    secundaria_tecnica = to_bool(result.get("secundaria_tecnica", False))
-
-    # DEBUG: Imprimir valores para diagnóstico (comentar después)
-    if result.get("nombre"):  # Solo si tiene nombre para evitar spam
-        print(f"\n🔍 DEBUG Preaprobado - {result.get('nombre', 'Sin nombre')}:")
-        print(f"   edad_en_rango: {result.get('edad_en_rango')} → {edad_en_rango}")
-        print(
-            f"   experiencia_electricista_confirmada: {result.get('experiencia_electricista_confirmada')} → {experiencia_confirmada}"
-        )
-        print(f"   hay_foto_en_cv: {result.get('hay_foto_en_cv')} → {hay_foto}")
-        print(
-            f"   secundaria_tecnica: {result.get('secundaria_tecnica')} → {secundaria_tecnica}"
+    if profile and profile.preaprobado_conditions:
+        # Usar condiciones del perfil
+        conditions = profile.preaprobado_conditions
+        preaprobado_value = all(
+            _to_bool(result.get(cond, False)) for cond in conditions
         )
 
-    # Un candidato está preaprobado si cumple TODOS los criterios
-    preaprobado_value = (
-        edad_en_rango and experiencia_confirmada and hay_foto and secundaria_tecnica
-    )
+        if result.get("nombre"):
+            print(f"\n🔍 Preaprobado - {result.get('nombre', 'Sin nombre')}:")
+            for cond in conditions:
+                print(f"   {cond}: {result.get(cond)} → {_to_bool(result.get(cond, False))}")
+            print(f"   → PREAPROBADO: {preaprobado_value}\n")
+    else:
+        # Fallback legacy
+        edad_en_rango = _to_bool(result.get("edad_en_rango", False))
 
-    if result.get("nombre"):
-        print(f"   → PREAPROBADO: {preaprobado_value}\n")
+        experiencia_confirmada = False
+        possible_exp_fields = [
+            "experiencia_electricista_confirmada",
+            "experiencia_electromecanico_confirmada",
+            "experiencia_mecanico_industrial_confirmada",
+            "experiencia_pañol_depositos_confirmada",
+            "experiencia_confirmada",
+        ]
+        for field in possible_exp_fields:
+            if field in result:
+                experiencia_confirmada = _to_bool(result.get(field, False))
+                break
+
+        hay_foto = _to_bool(result.get("hay_foto_en_cv", False))
+        secundaria_tecnica = _to_bool(result.get("secundaria_tecnica", False))
+
+        preaprobado_value = (
+            edad_en_rango and experiencia_confirmada and hay_foto and secundaria_tecnica
+        )
 
     result["preaprobado"] = preaprobado_value
-
     return result
 
 
@@ -1523,6 +1689,9 @@ def display_results():
             "mail": "Mail",
             "cv": "CV",
             "hay_foto_en_cv": "Foto en CV",
+            "stack_tecnologico": "Stack Tecnológico",
+            "match_tech_stack": "Match Tech Stack %",
+            "nivel_educativo_alcanzado": "Nivel Educativo",
         }
 
         if column_name in special_cases:
@@ -1536,18 +1705,46 @@ def display_results():
 
     # IMPORTANTE: Asegurar que las columnas prioritarias existan (aunque sea vacías)
     # Esto garantiza que siempre se muestren en el orden correcto
-    priority_columns_snake = [
-        "score_general",
-        "nombre",
-        "telefono",
-        "mail",
-        "localidad_residencia",
-        "edad",
-        "secundaria_completa",
-        "secundaria_tecnica",
-        "titulo_secundario",
-        "preaprobado",
-    ]
+    # Columnas dinámicas según el perfil activo
+    active_profile = st.session_state.get("active_profile", None)
+
+    if active_profile and active_profile.category == "it":
+        priority_columns_snake = [
+            "score_general",
+            "nombre",
+            "telefono",
+            "mail",
+            "localidad_residencia",
+            "edad",
+            "stack_tecnologico",
+            "match_tech_stack",
+            "nivel_educativo_alcanzado",
+            "preaprobado",
+        ]
+    elif active_profile and active_profile.category == "kiosko":
+        priority_columns_snake = [
+            "score_general",
+            "nombre",
+            "telefono",
+            "mail",
+            "localidad_residencia",
+            "edad",
+            "secundaria_completa",
+            "preaprobado",
+        ]
+    else:
+        priority_columns_snake = [
+            "score_general",
+            "nombre",
+            "telefono",
+            "mail",
+            "localidad_residencia",
+            "edad",
+            "secundaria_completa",
+            "secundaria_tecnica",
+            "titulo_secundario",
+            "preaprobado",
+        ]
 
     # Agregar columnas faltantes con valores None (antes de la conversión de nombres)
     # Primero revertimos temporalmente a nombres snake_case
@@ -1610,20 +1807,8 @@ def display_results():
     # Ahora sí convertir nombres de columnas
     df_display.columns = [snake_to_title(col) for col in df_display.columns]
 
-    # Reordenar columnas con el orden especificado
-    # Orden: score, nombre, telefono, mail, localidad residencia, edad, secundario completo, secundario técnico, titulo secundario, preaprobado, resto
-    priority_columns = [
-        "Score",  # score_general -> Score
-        "Nombre",
-        "Telefono",
-        "Mail",
-        "Localidad Residencia",
-        "Edad",
-        "Secundaria Completa",
-        "Secundaria Tecnica",
-        "Titulo Secundario",
-        "Preaprobado",
-    ]
+    # Reordenar columnas con el orden especificado (generado dinámicamente desde priority_columns_snake)
+    priority_columns = [snake_to_title(col) for col in priority_columns_snake]
 
     # Obtener columnas existentes en el orden prioritario
     ordered_cols = [col for col in priority_columns if col in df_display.columns]

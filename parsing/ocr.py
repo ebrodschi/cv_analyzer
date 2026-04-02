@@ -4,10 +4,13 @@ Puede detectar imágenes y fotos en los CVs.
 """
 
 import io
+import os
 import tempfile
 import traceback
 from pathlib import Path
 from typing import Dict, Union
+
+# Note: DOCLING_SKIP_RAPIDOCR is set in app.py before imports
 
 
 def parse_with_docling(
@@ -66,9 +69,34 @@ def parse_with_docling(
         print(f"   - Archivo temporal creado: {temp_path}")
 
         try:
-            # Crear converter con configuración por defecto (ya incluye OCR)
+            # Crear converter con configuración para usar Tesseract OCR
             print("   - Creando DocumentConverter con OCR habilitado...")
-            converter = DocumentConverter()
+
+            # Intentar configurar OCR options para forzar tesseract en ambientes con permisos restringidos
+            try:
+                from docling.datamodel.pipeline_options import (
+                    OcrOptions,
+                    PdfPipelineOptions,
+                )
+
+                pipeline_options = PdfPipelineOptions()
+                pipeline_options.do_ocr = True
+
+                # Forzar uso de tesseract en lugar de auto-detection
+                pipeline_options.ocr_options = OcrOptions(
+                    kind="tesseract",  # Forzar tesseract explícitamente
+                    force_full_page_ocr=False,
+                    use_pdf_images=True,
+                )
+
+                converter = DocumentConverter(
+                    format_options={InputFormat.PDF: pipeline_options}
+                )
+                print("   ✓ Configurado para usar Tesseract OCR")
+            except Exception as config_error:
+                # Fallback a configuración por defecto si falla la config explícita
+                print(f"   ⚠️ Usando config por defecto: {config_error}")
+                converter = DocumentConverter()
 
             # Convertir documento
             print("   - Convirtiendo documento con Docling...")

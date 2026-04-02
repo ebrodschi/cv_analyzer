@@ -349,6 +349,21 @@ def _variable_to_json_schema_property(var: Dict[str, Any]) -> Dict[str, Any]:
     return prop
 
 
+def get_schema_for_profile(profile) -> str:
+    """
+    Genera un esquema YAML a partir de un RecruiterProfile.
+
+    Args:
+        profile: RecruiterProfile con la configuración del perfil
+
+    Returns:
+        String con el esquema YAML
+    """
+    from profiles.schema_builder import build_schema_from_profile
+
+    return build_schema_from_profile(profile)
+
+
 def get_variable_names(schema: Dict[str, Any]) -> List[str]:
     """
     Extrae los nombres de todas las variables del esquema.
